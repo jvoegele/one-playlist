@@ -80,7 +80,63 @@ exist yet, first candidate for it):
 
 ## 3. Vault token round trip
 
-Status: not started.
+Status: done, on branch `spike/3-vault-token-roundtrip` (not merged — throwaway per §14).
+
+**Setup:** a migration creates `spike_vault_rows` (`owner uuid`, `secret_id uuid`, RLS on,
+policies scoped to `owner = (select auth.uid())`) plus two `SECURITY DEFINER` functions —
+`spike_store_token(p_token)`, granted to `authenticated`, which calls `vault.create_secret` and
+writes the row itself (owner = the caller); and `spike_read_token(p_row_id)`, granted only to
+`service_role`, which joins the row to `vault.decrypted_secrets` and returns the plaintext. This
+is a smaller stand-in for §8's `store_connection_tokens` / `connection_tokens` pair — no
+`provider_connections` table yet, just enough surface to test the Vault mechanism and the grant
+boundary around it. pgTAP tests (`supabase/tests/database/spike_vault_roundtrip_test.sql`, run
+with `supabase test db --local`) exercise it as `authenticated` (two different simulated users,
+via `set local role` + `set local request.jwt.claim.sub`) and as `service_role`.
+
+**Confirmed**, all 8 pgTAP assertions passing:
+- The full round trip works: `authenticated` stores a token through the rpc, `service_role`
+  reads back the exact plaintext through `spike_read_token`.
+- **`authenticated` cannot read `vault.decrypted_secrets` directly** — `permission denied for
+  schema vault`, not merely a denied column or row. `anon`/`authenticated` have no grant on the
+  `vault` schema at all locally, so this holds even before any policy is written; §8's design
+  (only `service_role`-granted functions touch the view) is enforcing a boundary Vault already
+  defaults to, not one this app has to build from scratch.
+- **RLS on `spike_vault_rows` scopes correctly**: the owner sees their row, a second simulated
+  user sees zero rows, and that second user's attempt to *insert* a row claiming `owner =` the
+  first user's id is rejected (`42501`, the RLS-violation code, same as a straight permission
+  denial) by the `with check` policy — this is the mechanism behind §8's "granted to
+  `authenticated` with a check that the connection belongs to `auth.uid()`".
+
+**Friction worth logging** (candidate for `docs/supabase-notes.md`, alongside Spike 2's):
+- **Supabase's default-privilege auto-grants apply to functions, not just tables.** The Elixir
+  repo's `CLAUDE.md` already documents this for new tables in `public` (`TRUNCATE`,
+  `REFERENCES`, `TRIGGER` land on `anon`/`authenticated` unasked). The same thing happens for
+  *functions*: a fresh `SECURITY DEFINER` function in `public` is auto-granted `EXECUTE` to
+  `anon`, `authenticated` **and** `service_role` before any explicit grant runs. `revoke all ...
+  from public` does **not** remove this — those are separate explicit per-role grants, not
+  inherited through the `PUBLIC` pseudo-role, so `spike_store_token` was callable by `anon` even
+  after a `revoke all from public` until the migration was corrected to `revoke all ... from
+  public, anon, authenticated, service_role` by name before granting back only what was
+  intended. Caught here by an explicit `has_function_privilege(...)` check, not by the pgTAP
+  suite — the tests never simulated `anon`, which is itself worth carrying forward: **every
+  privileged function needs a per-role grant assertion, not just a happy-path test as the
+  intended caller.**
+- `vault.create_secret`'s `name` argument is unique across the whole `vault.secrets` table (a
+  real index, `secrets_name_idx`). A fixed literal name across multiple calls (multiple users,
+  or a rerun without a fresh `db reset`) collides with `duplicate key value violates unique
+  constraint`. Passing `null` (the function's own default) sidesteps it; a real
+  `store_connection_tokens` should derive a name from the connection if it wants one to be
+  discoverable, not hardcode one.
+- Temporary tables get **no default privileges for other roles**, unlike `public`-schema
+  functions above — the opposite gotcha. A pgTAP fixture table created as the connecting
+  (superuser-ish) role needs an explicit `grant select, insert on ... to authenticated,
+  service_role` before a `set local role` switch can touch it, or every subsequent statement
+  fails with `permission denied for table`.
+- pgTAP's `throws_ok`/`lives_ok`/`results_eq` honour whatever role is currently set
+  (`set local role ...` + `set local request.jwt.claim.sub ...`) at the point they're called,
+  since the SQL under test runs as a plain `EXECUTE` in the same session — no special handling
+  needed to test RLS or grants across simulated users within one pgTAP transaction, as long as
+  the fixture-table privileges above are sorted out first.
 
 ## 4. Broadcast from Database on a private channel
 
