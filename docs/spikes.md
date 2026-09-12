@@ -297,4 +297,59 @@ code entered back in the requesting tab.
 
 ## 6. `linkIdentity` provider-token capture
 
-Status: not started.
+Status: done, on branch `spike/6-linkidentity-spotify` (not merged — throwaway per §14). Last
+of the six pre-Phase-1 spikes. Reuses the Elixir project's existing Spotify app (its dashboard
+gained `http://127.0.0.1:54321/auth/v1/callback` as an extra redirect URI), rather than a new
+one, since it's still a personal/5-user Development Mode app either way.
+
+**Setup:** password sign-in (simplest way to a real session; magic link was already proven in
+spike 5) plus a `/spike` page with a "Connect Spotify" button (Client Component — `linkIdentity`
+needs the SDK's own browser redirect, so it can't run from a Server Action). Per port-plan.md
+§8: `linkIdentity({ provider: 'spotify' })`, **never** `signInWithOAuth`, so it attaches to the
+signed-in user instead of risking a silent sign-in to a different account. `/auth/callback`
+(Route Handler) calls `exchangeCodeForSession(code)`, checks `session.provider_token` /
+`provider_refresh_token`, then immediately calls Spotify's own `/api/token` endpoint with
+`grant_type=refresh_token` and the app's client secret to prove the refresh token is real and
+usable — not just present. `config.toml` gained `enable_manual_linking = true` and
+`[auth.external.spotify]` (`env(SUPABASE_AUTH_EXTERNAL_SPOTIFY_CLIENT_ID/SECRET)`, via a new
+gitignored `supabase/.env`, `supabase/.env.example` as the committed template — same pattern
+the Elixir repo uses for its own local credentials). No Playwright here: the actual Spotify
+login/consent screen was driven by Jason, live, in his own browser — not something to script
+against a real third-party account.
+
+**Confirmed**, all four checks true on the results page:
+- `provider_token` and `provider_refresh_token` are both present in the `exchangeCodeForSession`
+  result, server-side, immediately after the redirect back from Spotify.
+- **The refresh token is real**: POSTing it to `https://accounts.spotify.com/api/token` with
+  the app's client secret returns `200`. This is the load-bearing confirmation for §8 — it's not
+  enough that GoTrue hands the token over once; the token itself has to work against Spotify's
+  own endpoint, since this application (not Supabase) owns refreshing it from here on.
+- **They don't survive a session refresh.** The first attempt at this check read `getSession()`
+  immediately after `exchangeCodeForSession()` in the same request and got a false negative
+  (still `true`/present) — that's just re-reading the same still-valid JWT, not a real test.
+  Forcing an actual refresh with `supabase.auth.refreshSession()` and checking *that* result
+  is what actually answers the question, and it came back correctly empty. Matches the Elixir
+  `CLAUDE.md`'s hard constraint verbatim: "`provider_token` and `provider_refresh_token` appear
+  once in the session and are then gone."
+- **One Spotify identity can only be linked to one Supabase user at a time.** A second local
+  test account's `linkIdentity` attempt failed closed and loudly —
+  `identity_already_exists` / "Identity is already linked to another user" — surfaced in the
+  callback URL's fragment, not silently. This is §8's own "one identity per provider per user"
+  constraint enforced by Auth itself, not just a planning assumption; freeing it up for re-test
+  meant deleting the row from `auth.identities` directly.
+
+**Decision: §8's hybrid holds for Spotify.** The refresh token arrives and works, so Spotify
+stays on the Supabase Auth (`linkIdentity`) path rather than falling back to an own flow.
+
+**Friction worth logging** (`docs/supabase-notes.md`):
+- **Browsing via `127.0.0.1` instead of `localhost` silently breaks client-side JS in Next
+  dev.** `auth.site_url` and the Spotify redirect URI both need `127.0.0.1` (Spotify rejects
+  `localhost` outright, per the Elixir `CLAUDE.md`), so that's how the app has to be browsed —
+  but Next's dev server logged (server-side, not in the browser console) "Blocked cross-origin
+  request to Next.js dev resource ... from 127.0.0.1" and refused to serve the client JS bundle.
+  The page still rendered (SSR), so the symptom was a button that looked normal but silently did
+  nothing on click — no console error, no visible network failure, because the block happened on
+  page load, not on click. Fix: `allowedDevOrigins: ["127.0.0.1"]` in `next.config.ts`.
+- A quick, wrong probe is worse than no probe: the first "absent afterward" check technically
+  ran and returned an answer, and the answer was misleading rather than obviously broken — worth
+  remembering that a passing check still needs to be checking the right thing.
