@@ -1,0 +1,19 @@
+# dependencies
+node_modules/
+
+# env / secrets — real values only ever come from `op inject`/`op run`, never committed
+.env
+.env.local
+.env.*.local
+supabase/.env
+
+# build output
+.next/
+dist/
+
+# supabase local
+supabase/.branches
+supabase/.temp
+
+# editor / OS
+.DS_Store
