@@ -215,11 +215,85 @@ already worried about. Worth carrying the `topic = realtime.topic()` clause into
 
 ## 5. `@supabase/ssr` magic link with `token_hash`
 
-Status: not started.
+Status: done, on branch `spike/5-magic-link-token-hash` (not merged — throwaway per §14).
+Spike 4's `apps/web` is gone with its branch, so this one re-scaffolds Next.js 16 from
+scratch (`npx create-next-app` — mechanical) rather than building on anything left on `main`.
 
-## 5. `@supabase/ssr` magic link with `token_hash`
+**Setup:** `/sign-in` (Client Component) posts to two Server Actions —
+`requestOtp` calls `supabase.auth.signInWithOtp({ email, options: { shouldCreateUser: true } })`,
+`verifyCode` calls `supabase.auth.verifyOtp({ email, token, type: 'email' })` — using a
+`createServerClient` from `src/lib/supabase/server.ts` (cookie-based, per the SSR guide).
+`src/app/auth/confirm/route.ts` is a Route Handler for the link: it calls
+`supabase.auth.verifyOtp({ token_hash, type })`, **never** `exchangeCodeForSession`, per §8.
+`src/proxy.ts` refreshes the session on every request via `getClaims()`. A protected
+`/spike` Server Component page (mirrors spike 4's pattern) reads `getClaims()` and shows the
+signed-in email, or redirects to `/sign-in`. `supabase/templates/magic_link.html` and
+`confirmation.html` both carry the `{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash
+}}&type=email` link and the `{{ .Token }}` six-digit code, wired into `config.toml`'s
+`[auth.email.template.magic_link]` / `[auth.email.template.confirmation]`.
+`apps/web/scripts/spike5-probe.mjs` drives it with Playwright against local Mailpit's API
+(`/api/v1/messages`, `/api/v1/message/{id}`) — two independent flows, each its own email
+address: the token_hash link opened in a Playwright `browser.newContext()` sharing no
+cookies with the one that requested it (the "different device" case), and the six-digit
+code entered back in the requesting tab.
 
-Status: not started.
+**Confirmed:**
+- **Both flows land signed in.** The link, opened in a browser context with zero cookie
+  overlap with the requesting one, reaches `/spike` and shows the right email — no PKCE
+  verifier cookie is available to it, yet `verifyOtp({ token_hash, type: 'email' })`
+  succeeds anyway. This is the concrete answer to §8's warning: the failure mode belongs to
+  `exchangeCodeForSession` (the PKCE code-exchange route), not to the `token_hash` +
+  `verifyOtp` route this plan already chose. Confirmed **even though** `signInWithOtp`
+  from `@supabase/ssr`'s `createServerClient` generates a `token_hash` value with a literal
+  `pkce_` prefix (visible in the emailed link and in server logs) — that prefix is
+  GoTrue's internal naming for how the hash was derived, not a marker that `verifyOtp`
+  needs a matching verifier cookie to succeed.
+- **The six-digit code path works independently**, entered back in the same tab that
+  requested it, via `verifyOtp({ email, token, type: 'email' })`.
+- **Both templates loaded without error** — `supabase start` set
+  `GOTRUE_MAILER_TEMPLATES_MAGIC_LINK` / `_CONFIRMATION` and `GOTRUE_MAILER_SUBJECTS_*` on
+  the `auth` container from `config.toml`'s new sections. Only `magic_link.html` was
+  exercised by a live flow, though: this project's local config sets
+  `enable_confirmations = false`, which maps to `GOTRUE_MAILER_AUTOCONFIRM=true` on the
+  container, so GoTrue never needs the separate signup-confirmation step even for a
+  brand-new address — every `signInWithOtp` here sends the `magic_link` template. §8's
+  reasoning ("which one GoTrue sends depends on `enable_confirmations`") still holds; this
+  local config just always lands on one side of that switch. `confirmation.html` is
+  presumably what a hosted project with `enable_confirmations = true` (or the first-touch
+  signup case) would send — not empirically checked here.
+
+**Friction worth logging** (`docs/supabase-notes.md`, alongside spikes 2 and 3's):
+- **A `config.toml` `[auth.email.template.*]` addition needs a full `supabase stop` then
+  `supabase start`, not just a re-edit.** `GOTRUE_MAILER_TEMPLATE_RELOADING_ENABLED=true`
+  hot-reloads a template *file's contents* at whatever `content_path` the container was
+  already given, but adding the `content_path`/`subject` config keys themselves means new
+  container env vars, which only get set when the container is recreated. A `supabase stop`
+  immediately followed by `supabase start` was not sufficient here — the auth container came
+  back up with the *old* env (no template vars set at all) until a `docker ps` check
+  confirmed the containers were actually gone before starting again. Suspect the first
+  `stop`/`start` pair raced the container's removal; worth a `docker ps -a` check as a habit
+  after `supabase stop` when a config change doesn't seem to take.
+- **`content_path` in `config.toml` is relative to the directory `supabase` is invoked
+  from (the repo root here), not to `config.toml`'s own directory.** Using
+  `"./templates/magic_link.html"` (relative to `supabase/`, where the file actually lives)
+  failed `supabase start` with `ENOENT`; the working value is
+  `"./supabase/templates/magic_link.html"`, matching the commented-out stock example the
+  scaffolded `config.toml` already carried for `invite.html`.
+- **The emailed link's host must match how you navigate to it.** `auth.site_url` here is
+  `http://127.0.0.1:3000`, so that's what's in the link — a probe or a person visiting
+  `http://localhost:3000` instead sees a different origin as far as cookies are concerned,
+  which can misleadingly look like the "different device" case even on the same machine.
+  Cost one debugging pass here before switching the probe's own `APP_URL` to match.
+- **`npx create-next-app apps/web` failed** with "path not writable" (even with the
+  sandbox's write restrictions lifted) when run from the repo root; running it as `cd apps
+  && npx create-next-app web` succeeded. Not chased further — possibly specific to this
+  agent's sandboxed shell rather than a general `create-next-app` issue — but worth trying
+  the `cd`-into-parent form first if it recurs.
+- Next.js 16's generated `AGENTS.md`/`CLAUDE.md` "this is NOT the Next.js you know" note
+  reappeared, as in spike 4. Read `node_modules/next/dist/docs/01-app/02-guides/
+  authentication.md` and `.../01-getting-started/{15-route-handlers,16-proxy}.md` this time
+  — confirmed `proxy.ts` (not `middleware.ts`) and the Route Handler conventions are
+  unchanged from spike 4's findings.
 
 ## 6. `linkIdentity` provider-token capture
 
