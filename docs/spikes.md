@@ -5,12 +5,30 @@ Each spike is a throwaway branch; the result recorded here is what carries forwa
 
 ## 1. Shared code deploy
 
-Status: deferred. Needs a real `supabase functions deploy` against a hosted project to answer —
-local `supabase functions serve` mounts the whole repo into the container, so an import
-reaching outside `supabase/functions/` would resolve locally regardless of whether it would
-survive a hosted deploy (which only bundles/uploads what the function actually needs). Waiting
-on Jason's Supabase employee account to activate. Branch layout §12 describes stays undecided
-until then.
+Status: done, on branch `spike/1-shared-code-deploy` (not merged — throwaway per §14).
+
+**Setup:** `packages/core/index.ts` exports a trivial `pingCore()`. A `shared-code-test` Edge
+Function imports it by relative path reaching outside `supabase/functions/`
+(`../../../packages/core/index.ts`) and returns its result. Deployed with `supabase functions
+deploy` against a real hosted project (free tier, org/project both named "One Playlist",
+created under Jason's `jason.voegele@supabase.io` account — not necessarily the project that
+ends up hosting the shipped app; that's still §17 Q1, unresolved).
+
+**Confirmed:** the CLI's `functions deploy` bundles the whole resolved dependency graph, not
+just the function's own directory — deploy logged "Bundling Function: shared-code-test (script
+size: 1.0 kB)", and invoking the deployed function returned `{"core":"core-ok"}`. The import
+across the `supabase/functions/` boundary works.
+
+**Decision (§12): `packages/core` as planned**, with a `deno.json` import map in each function
+mapping `@core/` to it, per §12's first branch. The fallback layout
+(`supabase/functions/_shared/core/`) is not needed.
+
+**Not exercised:** only a single-file, dependency-free export was tested. `packages/core` will
+eventually import Zod and a fuzzy-matching library (§12 requires both be pure, no Node-only
+APIs) — worth a quick recheck once those are actually in `packages/core`, but the mechanism
+(relative imports outside the function directory bundle correctly) is what was in question, and
+that's answered. The test function and its hosted deployment have been deleted from the
+project; nothing was left running or billing.
 
 ## 2. pgmq → Edge Function round trip
 
