@@ -140,6 +140,81 @@ via `set local role` + `set local request.jwt.claim.sub`) and as `service_role`.
 
 ## 4. Broadcast from Database on a private channel
 
+Status: done, on branch `spike/4-broadcast-private-channel` (not merged — throwaway per §14).
+
+**Setup:** a migration creates `spike_topics` (owned, RLS) and `spike_events` (RLS, scoped
+through its parent topic), a trigger on `spike_events` calling `realtime.broadcast_changes`
+onto `'spike:' || topic_id`, and — the actual question — a `FOR SELECT TO authenticated` policy
+on `realtime.messages` authorizing a join to that topic only for its owner. A throwaway
+`apps/web` (Next.js 16, App Router) is the first real code in this repo outside `supabase/`:
+`/spike/[topicId]` is a Server Component (`@supabase/ssr`, cookie-based session, redirects to
+`/login` if signed out) rendering a Client Component that calls
+`await supabase.realtime.setAuth()` then subscribes to `spike:<topicId>` as a `{ private: true }`
+channel, per §10's sketch. Two real local users were created via `supabase.auth.signUp`
+(`enable_confirmations = false` locally, so it's immediate). `apps/web/scripts/spike4-probe.mjs`
+drives it with Playwright — a real browser against the real dev server and the real local
+Realtime container, not a mock of any of the three.
+
+**Confirmed:**
+- **The owner's subscribe succeeds** (`SUBSCRIBED`) and the broadcast arrives over the channel
+  with no page reload, carrying exactly what the trigger sent.
+- **A different signed-in user's subscribe to the same topic fails closed, loudly**: channel
+  status `CHANNEL_ERROR`, with an explicit error — `Unauthorized: You do not have permissions to
+  read from this Channel topic: spike:<id>` — surfaced straight from `.subscribe()`'s callback.
+  This is exactly what §14 asked to confirm: not silently receiving nothing, an actual refused
+  join. Re-ran twice for reproducibility, both clean.
+  While that user's channel sits in `CHANNEL_ERROR`, the owner posting another event confirms
+  the non-owner never receives it — the failed join isn't a soft/delayed one.
+- **An anon visitor (no session at all) never reaches the channel code**: the Server Component's
+  own `auth.getUser()` redirects to `/login` before the Client Component mounts. A second,
+  independent layer ahead of Realtime's own check — worth keeping both, since they answer
+  different questions (signed in at all vs. authorized for *this* topic).
+- **pgTAP** (`supabase/tests/database/spike_broadcast_private_channel_test.sql`, 5 assertions)
+  tests the `realtime.messages` policy expression directly: the owner sees a seeded message on
+  their topic, a different user does not, that same user does on their *own* topic, the policy
+  never matches outside the `spike:` namespace, and `anon` is refused regardless — since the
+  policy is `TO authenticated` only. This tests the policy's logic; the live-refusal behaviour
+  above (that Realtime enforces it at join time, and fails the join rather than the delivery) is
+  what the Playwright probe is for, since pgTAP runs inside one Postgres transaction and can't
+  drive a real websocket handshake.
+
+**A real finding, not just spike mechanics — port-plan.md §10's own draft policy needed
+tightening.** The prescribed shape (`realtime.topic() like 'transfer:%' and exists (...)`) never
+compares the *row's own* `topic` column to the `realtime.topic()` GUC — it's a per-session
+boolean ("is the caller authorized for *some* topic they own right now"), not a per-row filter.
+Caught by writing the pgTAP test to expect a topic-scoped count and instead getting the whole
+table's row count back — every leftover message from every topic the owner had ever touched,
+across unrelated topics, because the `exists` clause was satisfied by any one of them. Adding
+`topic = realtime.topic()` to the `USING` clause fixed it, confirmed by both the pgTAP suite and
+a re-run of the live probe. This didn't change Realtime's own real join-time behaviour — its
+dry-run check is already scoped to the one topic being joined — but the *policy itself* was
+silently wrong by ordinary RLS standards, exactly the "passes for months while leaking" §10
+already worried about. Worth carrying the `topic = realtime.topic()` clause into the real
+`transfers` policy in Phase 5.
+
+**Friction worth logging** (`docs/realtime-notes.md`, since Jason is on this team — §10 says to):
+- Per Supabase's own Realtime Authorization docs: the join-time check "performs a query on the
+  `realtime.messages` table and then rolls it back" — no pre-existing row is required, and
+  `realtime.topic()` is set to the topic being joined only for the duration of that check. This
+  means a pgTAP test can validate the *policy expression* but not the live dry-run mechanism
+  itself; that needs an actual client against a running Realtime server, which is what
+  `spike4-probe.mjs` is for.
+- **Next.js 16 renamed `middleware.ts` to `proxy.ts`** (functionality unchanged) — `next dev`
+  logs a deprecation warning and names the exact codemod
+  (`npx @next/codemod middleware-to-proxy .`), which worked cleanly. A freshly scaffolded app
+  also carries a generated `AGENTS.md` warning that "this is NOT the Next.js you know" and to
+  read `node_modules/next/dist/docs/` before writing code — worth doing for real in Phase 1
+  rather than relying on training-data conventions, since a fresh session would otherwise write
+  the outdated `middleware.ts` convention by default, as this spike initially did.
+- **Server Actions can't be exercised with plain `curl`** — the request needs the RSC
+  action-id protocol a real page load sets up, not just matching form field names. A raw POST
+  gets `Failed to find Server Action`. Anything that exercises a Server Action needs a real
+  browser; Playwright (added as a throwaway devDependency here) filled in for the missing
+  claude-in-chrome extension this session, and is worth keeping in mind generally as the
+  fallback for driving Server Actions/RSC flows headlessly.
+
+## 5. `@supabase/ssr` magic link with `token_hash`
+
 Status: not started.
 
 ## 5. `@supabase/ssr` magic link with `token_hash`
