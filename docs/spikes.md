@@ -66,8 +66,7 @@ schedules `cron.schedule(..., '5 seconds', ...)` calling `net.http_post` against
   a snappier feel, with cron only as the backstop; at the real 1-minute cadence, worst case is
   a 60s wait with no direct call.
 
-**Friction worth logging** (not yet moved to `docs/supabase-notes.md` — that file doesn't
-exist yet, first candidate for it):
+**Friction worth logging** (filed in `docs/supabase-notes.md`):
 - Local dev needs `supabase functions serve` running as its own persistent background process
   for cron/pg_net to have anything to invoke — `supabase start` does not serve functions by
   itself. Easy to forget and get silent `net.http_post` failures with nothing obviously wrong
@@ -107,7 +106,7 @@ via `set local role` + `set local request.jwt.claim.sub`) and as `service_role`.
   denial) by the `with check` policy — this is the mechanism behind §8's "granted to
   `authenticated` with a check that the connection belongs to `auth.uid()`".
 
-**Friction worth logging** (candidate for `docs/supabase-notes.md`, alongside Spike 2's):
+**Friction worth logging** (filed in `docs/supabase-notes.md`, alongside Spike 2's):
 - **Supabase's default-privilege auto-grants apply to functions, not just tables.** The Elixir
   repo's `CLAUDE.md` already documents this for new tables in `public` (`TRUNCATE`,
   `REFERENCES`, `TRIGGER` land on `anon`/`authenticated` unasked). The same thing happens for
@@ -192,7 +191,7 @@ silently wrong by ordinary RLS standards, exactly the "passes for months while l
 already worried about. Worth carrying the `topic = realtime.topic()` clause into the real
 `transfers` policy in Phase 5.
 
-**Friction worth logging** (`docs/realtime-notes.md`, since Jason is on this team — §10 says to):
+**Friction worth logging** (filed in `docs/realtime-notes.md`, since Jason is on this team — §10 says to):
 - Per Supabase's own Realtime Authorization docs: the join-time check "performs a query on the
   `realtime.messages` table and then rolls it back" — no pre-existing row is required, and
   `realtime.topic()` is set to the topic being joined only for the duration of that check. This
@@ -262,7 +261,7 @@ code entered back in the requesting tab.
   presumably what a hosted project with `enable_confirmations = true` (or the first-touch
   signup case) would send — not empirically checked here.
 
-**Friction worth logging** (`docs/supabase-notes.md`, alongside spikes 2 and 3's):
+**Friction worth logging** (filed in `docs/supabase-notes.md`, alongside spikes 2 and 3's):
 - **A `config.toml` `[auth.email.template.*]` addition needs a full `supabase stop` then
   `supabase start`, not just a re-edit.** `GOTRUE_MAILER_TEMPLATE_RELOADING_ENABLED=true`
   hot-reloads a template *file's contents* at whatever `content_path` the container was
@@ -341,7 +340,7 @@ against a real third-party account.
 **Decision: §8's hybrid holds for Spotify.** The refresh token arrives and works, so Spotify
 stays on the Supabase Auth (`linkIdentity`) path rather than falling back to an own flow.
 
-**Friction worth logging** (`docs/supabase-notes.md`):
+**Friction worth logging** (filed in `docs/supabase-notes.md`):
 - **Browsing via `127.0.0.1` instead of `localhost` silently breaks client-side JS in Next
   dev.** `auth.site_url` and the Spotify redirect URI both need `127.0.0.1` (Spotify rejects
   `localhost` outright, per the Elixir `CLAUDE.md`), so that's how the app has to be browsed —
