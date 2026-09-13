@@ -22,3 +22,31 @@ One line per concept, dated, with the file it first appeared in. See `docs/port-
 - **2026-09-13** — Tailwind v4 configures itself in CSS via a native `@theme` block, rather than
   a `tailwind.config.js` (the v3 way) — Biome's CSS parser needs `tailwindDirectives: true` to
   parse it without erroring. `apps/web/src/app/globals.css`, `biome.json`
+- **2026-09-13** — shadcn/ui isn't a component library, it's a generator: `shadcn add` copies a
+  component's actual source into the repo (on Base UI primitives here), rather than installing
+  an opaque package. You own and edit the generated file from day one.
+  `apps/web/src/components/ui/button.tsx`
+- **2026-09-13** — RLS migration convention for this port: every new `public` table gets `enable
+  row level security`, an explicit `revoke all ... from anon, authenticated`, then only the
+  grants actually needed. Unlike the Elixir app (which wrote through a privileged `postgres`
+  connection and only exposed `authenticated` for reads), every read *and* write here goes
+  through PostgREST with the user's own JWT — so a user-owned table needs full
+  insert/update/delete grants and a `FOR ALL` policy, not just `SELECT`.
+  `supabase/migrations/20260913140251_create_library_playlists.sql`
+- **2026-09-13** — `moddatetime` (a Postgres contrib extension, installed to the `extensions`
+  schema) + a `BEFORE UPDATE` trigger is the standard way to keep an `updated_at` column current
+  — there's no ORM here to do it in application code the way Ecto did. Needs `id`/timestamp
+  columns to also get real DB-side defaults (`gen_random_uuid()`, `now()`) for the same reason.
+  same file
+- **2026-09-13** — pgTAP tests impersonate a real user with `set local role authenticated;
+  select set_config('request.jwt.claims', '{"sub":"<uuid>","role":"authenticated"}', true);` —
+  this is what actually exercises RLS policies, as opposed to querying as the superuser role
+  the test file runs under by default. `supabase/tests/library_playlists.test.sql`
+- **2026-09-13** — Two pgTAP gotchas worth remembering: (1) `now()` is frozen for the whole
+  transaction, so a test wrapped in one `begin`/`rollback` can't detect an `updated_at` bump by
+  comparing "before" and "after" — instead, backdate a fixture value far enough in the past
+  (e.g. year 2000) that the comparison holds regardless. (2) Verifying that a write against
+  *another* user's row was blocked must be checked from a role that isn't itself restricted by
+  the same policy (`reset role` before the check), or the check can pass for the wrong reason —
+  the acting user's own `SELECT` policy would hide that row regardless of whether the write was
+  actually blocked. same file
