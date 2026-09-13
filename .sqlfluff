@@ -1,0 +1,9 @@
+[sqlfluff]
+dialect = postgres
+max_line_length = 120
+
+[sqlfluff:indentation]
+implicit_indents = allow
+indented_joins = False
+indented_using_on = True
+template_blocks_indent = True
