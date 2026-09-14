@@ -17,3 +17,8 @@ supabase/.temp
 
 # editor / OS
 .DS_Store
+
+# agent skills — vendored content + symlinks, restore with `npx skills add supabase/agent-skills`
+# skills-lock.json (committed) pins the versions
+.agents/skills/
+.claude/skills/
