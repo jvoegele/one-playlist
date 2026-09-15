@@ -4,7 +4,7 @@ import { getSupabasePublishableKey, getSupabaseUrl } from "./env";
 
 // Refreshes the auth session if the access token has expired, mirrors any
 // refreshed cookies onto both the incoming request and the outgoing
-// response, and redirects signed-out requests to /login (docs/port-plan.md
+// response, and redirects signed-out requests to /auth/login (docs/port-plan.md
 // §8: the proxy uses getClaims() "to protect pages"). Called from proxy.ts
 // on every matched request — see its `config.matcher` for which requests
 // that is.
@@ -49,14 +49,10 @@ export async function updateSession(request: NextRequest) {
 
   const user = data?.claims;
 
-  if (
-    !user &&
-    !request.nextUrl.pathname.startsWith("/login") &&
-    !request.nextUrl.pathname.startsWith("/auth")
-  ) {
+  if (!user && !request.nextUrl.pathname.startsWith("/auth")) {
     // no user, potentially respond by redirecting the user to the login page
     const url = request.nextUrl.clone();
-    url.pathname = "/login";
+    url.pathname = "/auth/login";
     return NextResponse.redirect(url);
   }
 
