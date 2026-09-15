@@ -50,3 +50,14 @@ One line per concept, dated, with the file it first appeared in. See `docs/port-
   the same policy (`reset role` before the check), or the check can pass for the wrong reason —
   the acting user's own `SELECT` policy would hide that row regardless of whether the write was
   actually blocked. same file
+- **2026-09-14** — `supabase test db` recursively runs *every* `.sql` file under `supabase/tests/`
+  as its own independent, un-transacted psql script — there's no `.test.sql` filter and no way to
+  exclude a file via `config.toml` (checked: subdirectories and dotfiles are swept up too). So a
+  shared "fixtures" file can't safely live in that directory: tried factoring the Alice/Bob setup
+  out of `library_playlists.test.sql` and `provider_connections.test.sql` into one `\ir`-included
+  file, and it got executed on its own, outside any transaction, and actually committed the
+  fixture rows into the local dev database's `auth.users`. Moving it to a sibling directory
+  avoided that but made it unreachable — only `supabase/tests/` itself is visible to `\ir` at
+  runtime. Net effect: each pgTAP test file in this repo stays fully self-contained, duplicated
+  fixture block and all. `supabase/tests/library_playlists.test.sql`,
+  `supabase/tests/provider_connections.test.sql`

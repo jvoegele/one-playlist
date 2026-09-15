@@ -12,61 +12,26 @@ create extension if not exists pgtap with schema extensions;
 -- NOTE: this must match the exact number of assertions below, or `finish()` fails.
 select plan(8);
 
--- psql variables: pure text substitution, done by psql itself before the SQL is
--- even sent to the server. `:'alice_id'` expands to a quoted, escaped literal
--- (like quote_literal), so it's safe to drop straight into a `values` list.
-\set alice_id 11111111-1111-4111-8111-111111111111
-\set bob_id 22222222-2222-4222-8222-222222222222
-
--- Two fake users, written straight into auth.users. Fine here: this is a test
--- fixture inside a doomed transaction, not a real sign-up.
-insert into auth.users (id, instance_id, aud, role, email, created_at, updated_at)
-values
-(
-    :'alice_id',
-    '00000000-0000-0000-0000-000000000000',
-    'authenticated',
-    'authenticated',
-    'alice@pgtap.test',
-    now(),
-    now()
-),
-(
-    :'bob_id',
-    '00000000-0000-0000-0000-000000000000',
-    'authenticated',
-    'authenticated',
-    'bob@pgtap.test',
-    now(),
-    now()
-);
+-- Fixture users, created by tests.create_supabase_user() (from
+-- 00000-supabase_test_helpers.sql, which runs before this file — see that
+-- file for why the shared setup lives there and not in an \ir-included one).
+-- `tests.get_supabase_uid('alice')` looks a row back up by its identifier
+-- whenever we need the uuid below, so there's no local variable to track.
+select tests.create_supabase_user('alice', 'alice@pgtap.test');
+select tests.create_supabase_user('bob', 'bob@pgtap.test');
 
 -- One playlist each. id/created_at/updated_at all have defaults now, so they don't
 -- need to be specified.
 insert into public.library_playlists (user_id, name)
 values
-(:'alice_id', 'alice playlist'),
-(:'bob_id', 'bob playlist');
+(tests.get_supabase_uid('alice'), 'alice playlist'),
+(tests.get_supabase_uid('bob'), 'bob playlist');
 
 -- ---------------------------------------------------------------------------
--- Helper functions, created in pg_temp (the session's private schema) so they
--- disappear along with everything else when this transaction rolls back.
+-- Helper function local to this file, created in pg_temp (the session's
+-- private schema) so it disappears along with everything else when this
+-- transaction rolls back.
 -- ---------------------------------------------------------------------------
-
--- Makes the rest of the session look like a request from `user_id`, the way
--- PostgREST does it for Supabase: `authenticated` role, plus the JWT claims
--- that RLS policies read via `auth.uid()`.
-create function pg_temp.as_user(user_id uuid) returns void
-language plpgsql as $$
-begin
-    set local role authenticated;
-    perform set_config(
-        'request.jwt.claims',
-        json_build_object('sub', user_id, 'role', 'authenticated')::text,
-        true
-    );
-end;
-$$;
 
 -- Row count in library_playlists owned by p_user_id, under whatever
 -- role/claims are currently in effect.
@@ -79,34 +44,28 @@ $$;
 -- 1. RLS is opt-in — assert it was opted into.
 -- ---------------------------------------------------------------------------
 
-select ok(
-    (
-        select relrowsecurity from pg_class
-        where oid = 'public.library_playlists'::regclass
-    ),
-    'row level security is enabled on public.library_playlists'
-);
+select tests.rls_enabled('public', 'library_playlists');
 
 -- ---------------------------------------------------------------------------
 -- As Alice.
 -- ---------------------------------------------------------------------------
 
-select pg_temp.as_user(:'alice_id'::uuid);
+select tests.authenticate_as('alice');
 
 -- 2. Alice sees only her own playlist, never Bob's. One results_eq replaces
 -- what used to be two separate count() assertions.
 select results_eq(
     'select user_id from public.library_playlists',
-    array[:'alice_id'::uuid],
+    array[tests.get_supabase_uid('alice')],
     'Alice sees only her own playlist'
 );
 
 -- 3. Alice can insert a playlist that belongs to her.
 insert into public.library_playlists (user_id, name)
-values (:'alice_id', 'Alice in Chains');
+values (tests.get_supabase_uid('alice'), 'Alice in Chains');
 
 select is(
-    pg_temp.playlist_count_for(:'alice_id'::uuid),
+    pg_temp.playlist_count_for(tests.get_supabase_uid('alice')),
     2,
     'Alice can insert a playlist that belongs to her'
 );
@@ -116,7 +75,7 @@ select throws_ok(
     format(
         $$ insert into public.library_playlists (user_id, name)
            values (%L, 'Bob''s playlist') $$,
-        :'bob_id'
+        tests.get_supabase_uid('bob')
     ),
     '42501',
     'new row violates row-level security policy for table "library_playlists"'
@@ -124,60 +83,60 @@ select throws_ok(
 
 -- 5. Alice can update her own row, and the `updated_at` trigger actually fires.
 insert into public.library_playlists (user_id, name, updated_at)
-values (:'alice_id', 'alice2', '2000-01-01T00:00:00Z');
+values (tests.get_supabase_uid('alice'), 'alice2', '2000-01-01T00:00:00Z');
 
 update public.library_playlists set name = 'alice2 updated'
-where user_id = :'alice_id' and name = 'alice2';
+where user_id = tests.get_supabase_uid('alice') and name = 'alice2';
 
 select ok(
     (
         select updated_at > '2000-01-01T00:00:00Z'::timestamptz
         from public.library_playlists
-        where user_id = :'alice_id' and name = 'alice2 updated'
+        where user_id = tests.get_supabase_uid('alice') and name = 'alice2 updated'
     ),
     'updated_at was bumped by the trigger'
 );
 
 -- 6. Alice can delete her own rows.
 delete from public.library_playlists
-where user_id = :'alice_id';
+where user_id = tests.get_supabase_uid('alice');
 
 select is(
-    pg_temp.playlist_count_for(:'alice_id'::uuid),
+    pg_temp.playlist_count_for(tests.get_supabase_uid('alice')),
     0,
     'Alice can delete her own rows'
 );
 
 -- 7. Updating Bob's row (naming it explicitly) affects zero rows.
 update public.library_playlists set name = 'bob updated'
-where user_id = :'bob_id' and name = 'bob playlist';
+where user_id = tests.get_supabase_uid('bob') and name = 'bob playlist';
 
 reset role;
 
 select is(
     (
         select name from public.library_playlists
-        where user_id = :'bob_id'
+        where user_id = tests.get_supabase_uid('bob')
     ),
     'bob playlist',
     'Bob''s row was not updated by Alice'
 );
 
-select pg_temp.as_user(:'alice_id'::uuid);
+select tests.authenticate_as('alice');
 
 -- 8. Deleting Bob's row (naming it explicitly) affects zero rows.
 delete from public.library_playlists
-where user_id = :'bob_id';
+where user_id = tests.get_supabase_uid('bob');
 
 reset role;
 
 select is(
-    pg_temp.playlist_count_for(:'bob_id'::uuid),
+    pg_temp.playlist_count_for(tests.get_supabase_uid('bob')),
     1,
     'Bob''s row was not deleted by Alice'
 );
 
-select set_config('request.jwt.claims', '', true);
+select tests.clear_authentication();
 reset role;
 
 select * from finish();
