@@ -95,6 +95,23 @@ looks normal but silently does nothing on click — no console error, no visible
 failure, because the block happens on page load, not on click. Fix:
 `allowedDevOrigins: ["127.0.0.1"]` in `next.config.ts`.
 
+## The official Next.js auth UI block still scaffolds the deprecated `middleware.ts`
+
+**Found:** 2026-09-15, installing `npx shadcn add @supabase/password-based-auth-nextjs`.
+
+The block (Supabase's own registry, `https://supabase.com/ui/r/{name}.json`) generates
+`src/middleware.ts` + `src/lib/supabase/middleware.ts` implementing the session-refresh logic —
+but Next.js 16 renamed `middleware` to `proxy` and hard-errors if both a `middleware.ts` and a
+`proxy.ts` file exist in the same app ("Please use ./src/proxy.ts only"). A project that already
+followed the (also Supabase-published) `@supabase/ssr` Next.js guide and has its own `proxy.ts`
+breaks the moment this block is added, until the generated `middleware.ts` files are deleted by
+hand and the redirect target patched into the existing `proxy.ts`. Two Supabase-maintained
+surfaces — the SSR guide and this UI block — disagree with each other on a Next.js 16 project.
+The block's `client.ts`/`server.ts` also silently overwrite any existing files at those paths
+with versions that inline `process.env.X!` directly, dropping any project convention (e.g. a
+shared `env.ts` helper with real runtime validation) for reading them — worth diffing with
+`--diff` before accepting the overwrite.
+
 ## Not (yet) filed upstream
 
 None of the above have been filed as GitHub issues / support tickets yet — port-plan.md §18

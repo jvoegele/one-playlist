@@ -98,3 +98,29 @@ One line per concept, dated, with the file it first appeared in. See `docs/port-
   short "this Next version may differ from your training data, check
   `node_modules/next/dist/docs/`" note) and recreates them if deleted; its own guidance is to
   commit them. Doesn't touch the repo-root `CLAUDE.md`. `apps/web/AGENTS.md`, `apps/web/CLAUDE.md`
+- **2026-09-15** — First Server Action: an `async` function marked `'use server'`, handed
+  directly to `<form action={fn}>`. React/Next turns it into a POST endpoint and passes the
+  submitted `FormData` as the function's argument — the browser posts the form natively (works
+  without JS), no client-side `onSubmit` wiring needed. Closest Phoenix analogue: a controller
+  action colocated with the template that renders its form, with the routing auto-wired.
+  `apps/web/src/app/auth/login/actions.ts`
+- **2026-09-15** — `redirect()` (from `next/navigation`) throws a control-flow exception to
+  short-circuit the action — code after it never runs, and calling it from inside an unawaited
+  `.then()` callback breaks it (the throw happens outside the call stack Next is watching to
+  catch it). `revalidatePath()` doesn't throw, so it must be called *before* `redirect()`, not
+  after, or the revalidation never executes. same file
+- **2026-09-15** — `searchParams` (and `params`) on a Server Component page are `Promise`s in
+  this Next version, not plain objects — `const { error } = await searchParams;` before use.
+  `apps/web/src/app/auth/login/page.tsx`
+- **2026-09-15** — shadcn's CLI isn't limited to single UI primitives: `npx shadcn add
+  <registry>/<block-name>` can install a whole multi-file feature (pages, Server/Client
+  Components, route handlers, a new lib file) from a third-party registry — Supabase publishes
+  one at `https://supabase.com/ui/r/{name}.json`, wired into `components.json`'s `registries`
+  map. `--dry-run`, `--diff <file>`, and `--view <file>` preview exactly what it would
+  create/overwrite before committing to it — worth using every time, since a block this size can
+  silently overwrite hand-written files. `apps/web/components.json`
+- **2026-09-15** — Confirmed hands-on (not just read in the changelog): Next 16 hard-errors if
+  both a `middleware.ts` and a `proxy.ts` exist in the same app ("Both middleware file ... and
+  proxy file ... are detected. Please use ./src/proxy.ts only") — the dev server's own log
+  showed the exact error the moment the Supabase auth block's generated `middleware.ts` landed
+  next to our existing `proxy.ts`. `apps/web/src/lib/supabase/proxy.ts`
