@@ -61,3 +61,40 @@ One line per concept, dated, with the file it first appeared in. See `docs/port-
   runtime. Net effect: each pgTAP test file in this repo stays fully self-contained, duplicated
   fixture block and all. `supabase/tests/library_playlists.test.sql`,
   `supabase/tests/provider_connections.test.sql`
+- **2026-09-15** — Supabase's own "declarative schemas" (`supabase/schemas/*.sql` + `supabase db
+  diff`) is the CLI's recommended alternative to hand-writing migrations, but its diff engine
+  doesn't track RLS policy renames or column grants cleanly (documented `migra`/`pg-delta`
+  caveats) — decided to keep writing migrations by hand, so RLS stays individually reviewable.
+  Decision, no file.
+- **2026-09-15** — `@supabase/ssr`'s browser/server clients are two different factories on
+  purpose: `createBrowserClient` needs no cookie plumbing (the browser handles its own), while
+  `createServerClient` takes a cookie adapter (`getAll`/`setAll`) backed by `next/headers`'s
+  `cookies()` — which is itself `async` in this Next version, so the server factory has to be
+  `async` too. `apps/web/src/lib/supabase/client.ts`, `apps/web/src/lib/supabase/server.ts`
+- **2026-09-15** — `NEXT_PUBLIC_*` env vars reach the browser bundle by Next statically replacing
+  the literal `process.env.NEXT_PUBLIC_X` expression at build time — it does not ship all of
+  `process.env`. A shared helper that does `process.env[name]` with a dynamic `name` would
+  silently return `undefined` in browser code; the fix is a helper that takes the
+  already-dereferenced *value*, not the variable *name*. `apps/web/src/lib/supabase/env.ts`
+- **2026-09-15** — TypeScript's non-null assertion (`value!`) is compile-time only — it erases to
+  nothing at runtime, so a wrong assertion just lets `undefined` flow through to fail confusingly
+  downstream. Biome's `noNonNullAssertion` (mirrors `@typescript-eslint/no-non-null-assertion`)
+  flags it for that reason; `env.ts`'s `required()` does the equivalent check for real, at
+  runtime. `apps/web/src/lib/supabase/env.ts`
+- **2026-09-15** — Concise-body arrow functions (`(x) => f(x)`, no braces) implicitly `return` the
+  expression's value — easy to trip Biome's "callback passed to forEach() should not return a
+  value" lint by accident, since `.forEach()`'s contract is side-effects-only. Fix: wrap the body
+  in `{ }`. `apps/web/src/lib/supabase/proxy.ts`
+- **2026-09-15** — Next.js renamed "middleware" to "proxy": a root `proxy.ts` (exporting
+  `proxy()`) is now the convention, and the Supabase guide splits the actual logic into
+  `lib/supabase/proxy.ts`'s `updateSession()`, mirroring the existing
+  `client.ts`/`server.ts`/`env.ts` split. `apps/web/src/proxy.ts`,
+  `apps/web/src/lib/supabase/proxy.ts`
+- **2026-09-15** — `getClaims()` vs `getSession()`: only `getClaims()` revalidates the JWT
+  (against Supabase Auth's JWKS) rather than trusting whatever's in the cookie, so it's the one to
+  use for any check that gates access — `getSession()` is for reading claims when nothing
+  security-sensitive rides on them. `apps/web/src/lib/supabase/proxy.ts`
+- **2026-09-15** — Next.js 16 auto-generates `AGENTS.md`/`CLAUDE.md` per app on `next dev` (a
+  short "this Next version may differ from your training data, check
+  `node_modules/next/dist/docs/`" note) and recreates them if deleted; its own guidance is to
+  commit them. Doesn't touch the repo-root `CLAUDE.md`. `apps/web/AGENTS.md`, `apps/web/CLAUDE.md`
