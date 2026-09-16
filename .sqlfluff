@@ -1,6 +1,11 @@
 [sqlfluff]
 dialect = postgres
 max_line_length = 120
+# RF04 flags plain-English words like `position` and `version` as SQL
+# keywords. Both are meaningful domain vocabulary here (see
+# docs/reference/domain.md), carried over unchanged from the Elixir schema,
+# and Postgres itself treats neither as reserved.
+exclude_rules = RF04
 
 [sqlfluff:indentation]
 implicit_indents = allow
