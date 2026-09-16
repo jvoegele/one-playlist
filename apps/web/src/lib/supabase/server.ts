@@ -1,5 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
+import type { Database } from "@/lib/database.types";
 import { getSupabasePublishableKey, getSupabaseUrl } from "./env";
 
 // For use in Server Components, Server Actions, and Route Handlers.
@@ -9,20 +10,24 @@ import { getSupabasePublishableKey, getSupabaseUrl } from "./env";
 export async function createClient() {
   const cookieStore = await cookies();
 
-  return createServerClient(getSupabaseUrl(), getSupabasePublishableKey(), {
-    cookies: {
-      getAll() {
-        return cookieStore.getAll();
-      },
-      setAll(cookiesToSet) {
-        try {
-          cookiesToSet.forEach(({ name, value, options }) => {
-            cookieStore.set(name, value, options);
-          });
-        } catch {
-          // ignore errors, e.g. "cookies can only be set in middleware or route handlers"
-        }
+  return createServerClient<Database>(
+    getSupabaseUrl(),
+    getSupabasePublishableKey(),
+    {
+      cookies: {
+        getAll() {
+          return cookieStore.getAll();
+        },
+        setAll(cookiesToSet) {
+          try {
+            cookiesToSet.forEach(({ name, value, options }) => {
+              cookieStore.set(name, value, options);
+            });
+          } catch {
+            // ignore errors, e.g. "cookies can only be set in middleware or route handlers"
+          }
+        },
       },
     },
-  });
+  );
 }
