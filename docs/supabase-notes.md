@@ -43,6 +43,17 @@ suite, since the tests never simulated `anon`. Worth carrying forward as a habit
 privileged function needs a per-role grant assertion, not just a happy-path test as the
 intended caller.**
 
+**Recurred:** 2026-09-16, `place_entry` — this time on a plain function, not a `SECURITY
+DEFINER` one, which confirms the auto-grant isn't `DEFINER`-specific: it's every new function in
+`public`, full stop. The agent wrote the same `revoke all ... from public`-only skeleton despite
+this entry already existing, and it went unnoticed through a full review pass until a
+`has_function_privilege('anon', ...)` check was run directly against the local DB while writing
+the pgTAP suite — confirming the "every privileged function needs a per-role grant assertion"
+habit above is worth actually holding to, not just recording once and moving on. Fixed the same
+way: `revoke all ... from public, anon, authenticated, service_role`, then grant back only
+`authenticated`/`service_role`. `place_entry.test.sql` now asserts both directions
+(`authenticated` can execute, `anon` cannot) so a regression fails the suite, not a manual check.
+
 ## `vault.create_secret`'s `name` is globally unique
 
 **Found:** Spike 3.

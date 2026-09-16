@@ -124,3 +124,68 @@ One line per concept, dated, with the file it first appeared in. See `docs/port-
   proxy file ... are detected. Please use ./src/proxy.ts only") — the dev server's own log
   showed the exact error the moment the Supabase auth block's generated `middleware.ts` landed
   next to our existing `proxy.ts`. `apps/web/src/lib/supabase/proxy.ts`
+- **2026-09-16** — Decided against giving `library_recordings` (the shared, ownerless catalogue)
+  an `auth.uid() = user_id`-style policy — there's no owner column at all. Its `SELECT` policy is
+  a flat `USING (true)` for every `authenticated` user, and it has no write grant yet, so an
+  attempted insert fails with a plain `42501 permission denied for table` (a missing grant) rather
+  than the RLS-specific `"new row violates row-level security policy"` (a present grant, failed
+  check) — two different error paths to the same "no," depending on whether the privilege was
+  ever granted at all. `supabase/migrations/20260916120000_create_library_recordings.sql`
+- **2026-09-16** — An unqualified column name inside an `EXISTS` subquery resolves against that
+  subquery's *own* `FROM` list first, not the outer row — even inside an RLS `WITH CHECK`. Wrote
+  `EXISTS (SELECT 1 FROM library_playlists p WHERE p.id = playlist_id AND p.user_id = user_id)`
+  intending the last `user_id` to mean the outer row's column; Postgres bound it to `p.user_id`
+  instead (a real column on `p`), making the whole clause a self-comparison tautology. Only
+  visible by asking Postgres to deparse what it actually stored: `select
+  pg_get_expr(polwithcheck, polrelid) from pg_policy where ...` showed `p.user_id = p.user_id`
+  in black and white. Fix: qualify every reference on both sides, `library_playlist_items.user_id`
+  included. `supabase/migrations/20260916130000_create_library_playlist_items.sql`
+- **2026-09-16** — First `rpc` function: PostgREST exposes any granted Postgres function at
+  `/rest/v1/rpc/<name>`, and `supabase.rpc()` is just a client-side call to that endpoint.
+  `SECURITY INVOKER` (a function's default — worth writing the word even though it needn't be
+  written) means the function's own statements run as the calling role, so a function that only
+  touches already-RLS-protected tables gets ownership enforcement for free, with no need to
+  re-check `auth.uid()` inside the function itself. `SECURITY DEFINER` is only for a function
+  doing something the caller isn't otherwise granted to do directly (e.g. writing to
+  `vault.secrets`). `supabase/migrations/20260916140000_create_place_entry_function.sql`
+- **2026-09-16** — PL/pgSQL function parameters prefixed `p_` (`p_entry_id`, not `entry_id`) is
+  more than a naming convention here: it's the direct mitigation for the same ambiguous-name class
+  of bug as the RLS policy above. If a parameter shared a name with a column the function queries,
+  an unqualified reference in the function body could silently bind to the column instead of the
+  parameter. same file
+- **2026-09-16** — Chose gap-based/fractional integer positions for playlist ordering over a
+  doubly-linked list (`previous_item`/`next_item` columns), after weighing them explicitly: a
+  linked list makes a single move O(1), but Postgres has no `ORDER BY` for a chain of pointers —
+  reading a playlist in order would need a recursive CTE walk, a slower and much less common
+  piece of SQL than an indexed `ORDER BY position`. It also has a worse failure mode: a bad write
+  to a position column produces, at worst, a duplicate or a tie; a bad write to a linked list can
+  silently create a cycle or drop a row out of the chain, with no constraint able to catch it.
+  Decision, no file — see `docs/port-plan.md` §13.
+- **2026-09-16** — Two PL/pgSQL traps, both hit while writing `place_entry`: (1) a `NULL` inside
+  an `IF` condition is silently treated as *false*, not an error — `IF v_after_playlist_id <>
+  v_playlist_id THEN` skipped its `RAISE EXCEPTION` entirely when the looked-up id didn't exist,
+  because `NULL <> anything` is `NULL`. Needs an explicit `v_after_playlist_id IS NULL OR
+  v_after_playlist_id <> v_playlist_id`. (2) `integer / integer` truncates: `(100 + 101) / 2` is
+  `100`, not `100.5`, so a "is there room for a value strictly between these two" check needs
+  `> 1`, not `> 0`, or the fast path silently duplicates a neighbor's position instead of falling
+  back to renumbering. `supabase/migrations/20260916140000_create_place_entry_function.sql`
+- **2026-09-16** — Renumbering a whole ordered list declaratively, instead of computing an
+  insertion index by hand: give the row being spliced in a synthetic, fractional sort key (its new
+  lower-bound neighbor's position, plus `0.5`) alongside everyone else's real position, and
+  `ROW_NUMBER() OVER (ORDER BY sort_key)` reconstructs the entire order, splice included, in one
+  `SELECT`. Multiplying the rank by a gap constant turns that straight into fresh, evenly spaced
+  positions, written with a single `UPDATE ... FROM`. same file
+- **2026-09-16** — `SELECT ... FOR UPDATE` over every row about to be read *and possibly written*,
+  before computing anything from their values, is the PL/pgSQL pattern for serializing two
+  concurrent calls that would otherwise both read the same stale state and then both write (two
+  tabs reordering the same playlist at once). same file
+- **2026-09-16** — Supabase's platform-level `ALTER DEFAULT PRIVILEGES` on the `public` schema
+  auto-grants `EXECUTE` on every new function to `anon`, `authenticated`, **and** `service_role`
+  the moment it's created, regardless of what the migration itself grants — `revoke all ... from
+  public` only undoes the plain-Postgres default (a grant to the `PUBLIC` pseudo-role); it does
+  nothing to these separate, already-materialized per-role grants. This is the *same* surprise
+  `docs/supabase-notes.md` already recorded from Spike 3, there for a `SECURITY DEFINER` function
+  — it recurred today on a plain (non-`DEFINER`) function, confirming it isn't `DEFINER`-specific,
+  and this agent wrote the same `revoke all ... from public`-only mistake despite that note
+  already existing. Caught this time by an explicit `has_function_privilege(...)` pgTAP
+  assertion, not by re-reading the migration. same file, `supabase/tests/place_entry.test.sql`
